@@ -238,7 +238,7 @@ class ArrayToBufferMap:
         non1_storage_shape = []
 
         for saxis_len in storage_shape:
-            has_length_non1 = saxis_len != 1
+            has_length_non1 = False
 
             non1_storage_axis_flags.append(has_length_non1)
 
