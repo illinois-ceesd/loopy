@@ -36,7 +36,7 @@ from loopy.kernel import LoopKernel
 from loopy.kernel.function_interface import CallableKernel
 
 from typing import Optional
-from immutables import Map
+from immutabledict import immutabledict
 
 __doc__ = """
 .. currentmodule:: loopy
@@ -1592,8 +1592,8 @@ class _ReductionInameUniquifier(RuleAwareIdentityMapper):
 
     def get_cache_key(self, expr, expn_state):
         return (super().get_cache_key(expr, expn_state),
-                hash(Map(self.iname_to_red_count)),
-                hash(Map(self.iname_to_nonsimultaneous_red_count)),
+                hash(immutabledict(self.iname_to_red_count)),
+                hash(immutabledict(self.iname_to_nonsimultaneous_red_count)),
                 )
 
     def map_reduction(self, expr, expn_state):
