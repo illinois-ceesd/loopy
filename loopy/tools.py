@@ -999,7 +999,7 @@ class Tree(Generic[T]):
         return Tree(pmap({root: frozenset()}),
                     pmap({root: None}))
 
-    @property
+    @cached_property
     def root(self) -> T:
         guess = set(self._child_to_parent).pop()
         while self.parent(guess) is not None:
@@ -1007,6 +1007,7 @@ class Tree(Generic[T]):
 
         return guess
 
+    @memoize_method
     def ancestors(self, node: T) -> "FrozenSet[T]":
         """
         Returns a :class:`frozenset` of nodes that are ancestors of *node*.
@@ -1034,6 +1035,7 @@ class Tree(Generic[T]):
 
         return self._parent_to_children[node]
 
+    @memoize_method
     def depth(self, node: T) -> int:
         if not self.is_a_node(node):
             raise ValueError(f"'{node}' not in tree.")
