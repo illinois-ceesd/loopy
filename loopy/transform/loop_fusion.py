@@ -276,11 +276,12 @@ def _get_ldg_nodes_from_loopy_insn(kernel, insn, candidates, non_candidates,
                                    | insn.reduction_inames())
                                   & candidates)]
     else:
-        non_candidate, = {loop_nest
+        non_candidate = {loop_nest
                           for loop_nest in non_candidates
                           if (loop_nest & insn.within_inames)}
 
         if non_candidate:
+            non_candidate, = non_candidate
             return [NonCandidateLoop(non_candidate)]
         else:
             assert ((insn.within_inames & just_outer_loop_nest)
