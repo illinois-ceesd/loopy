@@ -1592,8 +1592,8 @@ class _ReductionInameUniquifier(RuleAwareIdentityMapper):
 
     def get_cache_key(self, expr, expn_state):
         return (super().get_cache_key(expr, expn_state),
-                hash(immutabledict(self.iname_to_red_count)),
-                hash(immutabledict(self.iname_to_nonsimultaneous_red_count)),
+                immutabledict(self.iname_to_red_count),
+                immutabledict(self.iname_to_nonsimultaneous_red_count),
                 )
 
     def map_reduction(self, expr, expn_state):
