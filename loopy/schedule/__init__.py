@@ -42,7 +42,8 @@ from loopy.version import DATA_MODEL_VERSION
 
 if TYPE_CHECKING:
     from loopy.kernel import LoopKernel
-    from loopy.kernel.function_interface import InKernelCallable
+    from loopy.translation_unit import CallablesTable, TranslationUnit
+
 
 logger = logging.getLogger(__name__)
 
@@ -2156,7 +2157,7 @@ class MinRecursionLimitForScheduling(MinRecursionLimit):
 
 def generate_loop_schedules(
         kernel: LoopKernel,
-        callables_table: Mapping[str, InKernelCallable],
+        callables_table: CallablesTable,
         debug_args: Optional[Dict[str, Any]] = None) -> Iterator[LoopKernel]:
     """
     .. warning::
@@ -2214,7 +2215,7 @@ def postprocess_schedule(kernel, callables_table, gen_sched):
 # def generate_loop_schedules_inner(kernel, callables_table, debug_args=None):
 def generate_loop_schedules_inner(
         kernel: LoopKernel,
-        callables_table: Mapping[str, InKernelCallable],
+        callables_table: CallablesTable,
         debug_args: Optional[Dict[str, Any]]) -> Iterator[LoopKernel]:
     if debug_args is None:
         debug_args = {}
@@ -2370,7 +2371,10 @@ def generate_loop_schedules_inner(
 # }}}
 
 
-schedule_cache = WriteOncePersistentDict(
+schedule_cache: WriteOncePersistentDict[
+        Tuple[LoopKernel, CallablesTable],
+        LoopKernel
+] = WriteOncePersistentDict(
         "loopy-schedule-cache-v4-"+DATA_MODEL_VERSION,
         key_builder=LoopyKeyBuilder())
 
@@ -2378,7 +2382,10 @@ schedule_cache = WriteOncePersistentDict(
 caches.append(schedule_cache)
 
 
-def _get_one_linearized_kernel_inner(kernel, callables_table):
+def _get_one_linearized_kernel_inner(
+            kernel: LoopKernel,
+            callables_table: CallablesTable
+        ) -> LoopKernel:
     # This helper function exists to ensure that the generator chain is fully
     # out of scope after the function returns. This allows it to be
     # garbage-collected in the exit handler of the
@@ -2391,7 +2398,9 @@ def _get_one_linearized_kernel_inner(kernel, callables_table):
     return next(iter(generate_loop_schedules(kernel, callables_table)))
 
 
-def get_one_linearized_kernel(kernel, callables_table):
+def get_one_linearized_kernel(
+            kernel: LoopKernel,
+            callables_table: CallablesTable) -> LoopKernel:
     from loopy import CACHING_ENABLED
 
     # must include *callables_table* within the cache key as the preschedule
@@ -2429,7 +2438,7 @@ def get_one_scheduled_kernel(kernel, callables_table):
     return get_one_linearized_kernel(kernel, callables_table)
 
 
-def linearize(t_unit):
+def linearize(t_unit: TranslationUnit) -> TranslationUnit:
     from loopy.kernel.function_interface import (CallableKernel,
                                                  ScalarCallable)
     from loopy.check import pre_schedule_checks
