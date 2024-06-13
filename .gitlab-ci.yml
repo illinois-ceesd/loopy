@@ -22,6 +22,7 @@ Pytest Nvidia Titan V:
   - source /opt/enable-intel-cl.sh
   - curl -L -O https://gitlab.tiker.net/inducer/ci-support/raw/main/build-and-test-py-project.sh
   - ". ./build-and-test-py-project.sh"
+
   tags:
   - python3
   - nvidia-titan-v

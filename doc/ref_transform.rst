@@ -54,6 +54,8 @@ Influencing data access
 
 .. autofunction:: allocate_temporaries_for_base_storage
 
+.. automodule:: loopy.transform.reindex
+
 Padding Data
 ------------
 
@@ -79,6 +81,13 @@ Manipulating Instructions
 .. autofunction:: add_nosync
 
 .. autofunction:: add_barrier
+
+Manipulating Reductions
+-----------------------
+
+.. autofunction:: hoist_invariant_multiplicative_terms_in_sum_reduction
+
+.. autofunction:: extract_multiplicative_terms_in_sum_reduction_as_subst
 
 Registering Library Routines
 ----------------------------
@@ -142,5 +151,11 @@ Matching contexts
 TODO: Matching instruction tags
 
 .. automodule:: loopy.match
+
+
+Fusing Loops
+------------
+
+.. automodule:: loopy.transform.loop_fusion
 
 .. vim: tw=75:spell

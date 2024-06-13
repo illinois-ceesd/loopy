@@ -108,6 +108,8 @@ from loopy.transform.buffer import buffer_array
 from loopy.transform.fusion import fuse_kernels
 from loopy.transform.concatenate import concatenate_arrays
 
+from loopy.transform.reindex import reindex_temporary_using_seghir_loechner_scheme
+
 from loopy.transform.arithmetic import (
         fold_constants,
         collect_common_factors_on_increment)
@@ -123,6 +125,10 @@ from loopy.transform.batch import to_batched
 from loopy.transform.parameter import assume, fix_parameters
 from loopy.transform.save import save_and_reload_temporaries
 from loopy.transform.add_barrier import add_barrier
+from loopy.transform.reduction import (
+    hoist_invariant_multiplicative_terms_in_sum_reduction,
+    extract_multiplicative_terms_in_sum_reduction_as_subst)
+from loopy.transform.domain import decouple_domain
 from loopy.transform.callable import (register_callable,
         merge, inline_callable_kernel, rename_callable)
 from loopy.transform.pack_and_unpack_args import pack_and_unpack_args_for_call
@@ -159,11 +165,14 @@ from loopy.target.c import (CFamilyTarget, CTarget, ExecutableCTarget,
 from loopy.target.cuda import CudaTarget
 from loopy.target.opencl import OpenCLTarget
 from loopy.target.pyopencl import PyOpenCLTarget
+from loopy.target.pycuda import PyCudaTarget, PyCudaWithPackedArgsTarget
 from loopy.target.ispc import ISPCTarget
 
 from loopy.tools import (Optional, t_unit_to_python, memoize_on_disk,
                          clear_in_mem_caches)
 
+from loopy.transform.loop_fusion import (get_kennedy_unweighted_fusion_candidates,
+                                          rename_inames_in_batch)
 from loopy.target.execution import ExecutorBase
 
 
@@ -241,6 +250,8 @@ __all__ = [
 
         "fold_constants", "collect_common_factors_on_increment",
 
+        "reindex_temporary_using_seghir_loechner_scheme",
+
         "split_array_axis", "split_array_dim", "split_arg_axis",
         "find_padding_multiple", "add_padding",
 
@@ -255,12 +266,19 @@ __all__ = [
 
         "add_barrier",
 
+        "hoist_invariant_multiplicative_terms_in_sum_reduction",
+        "extract_multiplicative_terms_in_sum_reduction_as_subst",
+        "decouple_domain",
+
         "register_callable",
         "merge",
 
         "inline_callable_kernel", "rename_callable",
 
         "pack_and_unpack_args_for_call",
+
+        "rename_inames_in_batch",
+        "get_kennedy_unweighted_fusion_candidates",
 
         # }}}
 
@@ -309,7 +327,7 @@ __all__ = [
         "CWithGNULibcTarget", "ExecutableCWithGNULibcTarget",
         "CudaTarget", "OpenCLTarget",
         "PyOpenCLTarget", "ISPCTarget",
-        "ASTBuilderBase",
+        "PyCudaTarget", "PyCudaWithPackedArgsTarget", "ASTBuilderBase",
 
         "Optional", "memoize_on_disk", "clear_in_mem_caches",
 
@@ -327,6 +345,15 @@ __all__ = [
 
         # }}}
         ]
+
+
+try:
+    import loopy.relations as relations
+except ImportError:
+    # catching ImportErrors to avoid making minikanren a hard-dep
+    pass
+else:
+    __all__ += ["relations"]
 
 # }}}
 
