@@ -753,16 +753,22 @@ def get_kennedy_unweighted_fusion_candidates(
     # {{{ sanitary checks
 
     _nest_tree_id_to_candidate = {}
+    candidates_new = set()
 
     for iname in candidates:
         loop_nest_tree_node_id = iname_to_tree_node_id[iname]
         if loop_nest_tree_node_id not in _nest_tree_id_to_candidate:
             _nest_tree_id_to_candidate[loop_nest_tree_node_id] = iname
+            candidates_new.add(iname)
         else:
             conflict_iname = _nest_tree_id_to_candidate[loop_nest_tree_node_id]
-            raise LoopyError(f"'{iname}' and '{conflict_iname}' "
-                             "cannot fused be fused as they can be nested "
+            from warnings import warn
+            warn(f"'{iname}' and '{conflict_iname}' "
+                             "cannot be fused as they can be nested "
                              "within one another.")
+
+    candidates = candidates_new
+    del candidates_new
 
     for iname in candidates:
         outer_loops = reduce(frozenset.union,
