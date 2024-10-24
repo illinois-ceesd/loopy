@@ -29,7 +29,17 @@ THE SOFTWARE.
 import re
 from functools import cached_property, reduce
 from sys import intern
-from typing import TYPE_CHECKING, AbstractSet, Any, ClassVar, Mapping, Sequence, Tuple
+
+from typing import (
+    TYPE_CHECKING,
+    AbstractSet,
+    Any,
+    ClassVar,
+    Mapping,
+    Sequence,
+    Tuple,
+    Union
+)
 
 import immutables
 import numpy as np
@@ -172,16 +182,26 @@ class IdentityMapperMixin:
 
         return type(expr)(expr.type, new_child)
 
+    def map_type_cast(self, expr, *args, **kwargs):
+        return self.rec(expr.child, *args, **kwargs)
+
     def map_sub_array_ref(self, expr, *args, **kwargs):
-        new_inames = self.rec(expr.swept_inames, *args, **kwargs)
-        new_subscript = self.rec(expr.subscript, *args, **kwargs)
+        return self.combine((
+            self.rec(expr.subscript, *args, **kwargs),
+            self.combine(tuple(
+                         self.rec(idx, *args, **kwargs)
+                         for idx in expr.swept_inames))))
 
-        if (all(new_iname is old_iname
-                for new_iname, old_iname in zip(new_inames, expr.swept_inames))
-                and new_subscript is expr.subscript):
-            return expr
-
-        return SubArrayRef(new_inames, new_subscript)
+    # def map_sub_array_ref(self, expr, *args, **kwargs):
+    #    new_inames = self.rec(expr.swept_inames, *args, **kwargs)
+    #    new_subscript = self.rec(expr.subscript, *args, **kwargs)
+    #
+    #    if (all(new_iname is old_iname
+    #            for new_iname, old_iname in zip(new_inames, expr.swept_inames))
+    #            and new_subscript is expr.subscript):
+    #        return expr
+    #
+    #    return SubArrayRef(new_inames, new_subscript)
 
     def map_resolved_function(self, expr, *args, **kwargs):
         # leaf, doesn't change
@@ -2849,5 +2869,30 @@ def is_tuple_of_expressions_equal(a, b):
         for ai, bi in zip(a, b))
 
 # }}}
+
+
+def _is_isl_set_universe(isl_set: Union[isl.BasicSet, isl.Set]):
+    if isinstance(isl_set, isl.BasicSet):
+        return isl_set.is_universe()
+    else:
+        assert isinstance(isl_set, isl.Set)
+        return isl_set.complement().is_empty()
+
+
+def pw_qpolynomial_to_expr(pw_qpoly: isl.PwQPolynomial
+                           ) -> ExpressionT:
+    from pymbolic.primitives import If
+
+    result = 0
+
+    for bset, qpoly in reversed(pw_qpoly.get_pieces()):
+        if _is_isl_set_universe(bset):
+            result = qpolynomial_to_expr(qpoly)
+        else:
+            result = If(set_to_cond_expr(bset),
+                        qpolynomial_to_expr(qpoly),
+                        result)
+
+    return result
 
 # vim: foldmethod=marker
