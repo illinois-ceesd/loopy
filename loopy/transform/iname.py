@@ -24,6 +24,7 @@ THE SOFTWARE.
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from typing import Any, FrozenSet, Optional
 
+from immutabledict import immutabledict
 from typing_extensions import TypeAlias
 
 import islpy as isl
@@ -1594,10 +1595,9 @@ class _ReductionInameUniquifier(RuleAwareIdentityMapper):
         self.iname_to_nonsimultaneous_red_count = {}
 
     def get_cache_key(self, expr, expn_state):
-        return (super().get_cache_key(expr, expn_state)
-                + tuple(sorted(self.iname_to_red_count.items()))
-                + tuple(sorted(self.iname_to_nonsimultaneous_red_count.items()))
-                )
+        return (super().get_cache_key(expr, expn_state),
+                immutabledict(self.iname_to_red_count),
+                immutabledict(self.iname_to_nonsimultaneous_red_count),)
 
     def map_reduction(self, expr, expn_state):
         within = self.within(
