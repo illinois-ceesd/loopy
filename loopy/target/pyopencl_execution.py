@@ -350,7 +350,7 @@ class PyOpenCLExecutor(ExecutorBase):
         cl_kernels = _Kernels()
         kernel_names = []
         for dp in cl_program.kernel_names.split(";"):
-            if "rhs" in dp:
+            if "part" in dp:
                 kernel_names.append(dp)
             setattr(cl_kernels, dp, getattr(cl_program, dp))
         if len(kernel_names) > 0:
