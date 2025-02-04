@@ -320,7 +320,7 @@ class PyOpenCLExecutor(ExecutorBase):
         codegen_result = generate_code_v2(t_unit)
 
         dev_code = codegen_result.device_code()
-
+        
         if t_unit[self.entrypoint].options.write_code:
             # FIXME: redirect to "translation unit" level option as well.
             output = dev_code
@@ -348,8 +348,14 @@ class PyOpenCLExecutor(ExecutorBase):
                 .build(options=t_unit[self.entrypoint].options.build_options))
 
         cl_kernels = _Kernels()
+        kernel_names = []
         for dp in cl_program.kernel_names.split(";"):
+            if "rhs" in dp:
+                kernel_names.append(dp)
             setattr(cl_kernels, dp, getattr(cl_program, dp))
+        if len(kernel_names) > 0:
+            print(f"Kernel Names: {kernel_names}")
+            print(f"DEVICE CODE:\n{dev_code}\n")
 
         return _KernelInfo(
                 cl_kernels=cl_kernels,
