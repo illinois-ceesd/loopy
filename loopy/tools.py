@@ -22,12 +22,17 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 """
-
 import collections.abc as abc
 import logging
 from functools import cached_property
 from sys import intern
-from typing import FrozenSet, Generic, TypeVar, Iterator
+from typing import (
+    TYPE_CHECKING,
+    FrozenSet,
+    Generic,
+    TypeVar,
+    Iterator
+)
 from dataclasses import dataclass
 
 import numpy as np
@@ -44,6 +49,10 @@ from .symbolic import (
     RuleAwareIdentityMapper,
 )
 from .typing import is_integer  # noqa: F401
+
+
+if TYPE_CHECKING:
+    from numpy.typing import DTypeLike, NDArray
 
 
 logger = logging.getLogger(__name__)
@@ -278,7 +287,12 @@ def cptr_from_numpy(obj):
 
 
 # https://github.com/hgomersall/pyFFTW/blob/master/pyfftw/utils.pxi#L172
-def empty_aligned(shape, dtype, order="C", n=64):
+def empty_aligned(
+            shape: tuple[int, ...] | int,
+            dtype: DTypeLike,
+            order: np._OrderACF = "C",
+            n: int = 64
+         ) -> NDArray[np.generic]:
     """empty_aligned(shape, dtype='float64', order="C", n=None)
     Function that returns an empty numpy array that is n-byte aligned,
     where ``n`` is determined by inspecting the CPU if it is not
@@ -288,6 +302,8 @@ def empty_aligned(shape, dtype, order="C", n=64):
     determine alignment. The rest of the arguments are as per
     :func:`numpy.empty`.
     """
+    shape_tup = shape if isinstance(shape, tuple) else (shape,)
+
     itemsize = np.dtype(dtype).itemsize
 
     # Apparently there is an issue with numpy.prod wrapping around on 32-bits
@@ -309,7 +325,7 @@ def empty_aligned(shape, dtype, order="C", n=64):
 
     array = np.frombuffer(
             base_ary[array_aligned_offset:array_aligned_offset-n].data,
-            dtype=dtype).reshape(shape, order=order)
+            dtype=dtype).reshape(*shape_tup, order=order)
 
     return array
 
@@ -584,16 +600,16 @@ class Optional:
 # }}}
 
 
-def unpickles_equally(obj):
+def unpickles_equally(obj: object) -> bool:
     from pickle import dumps, loads
-    return loads(dumps(obj)) == obj
+    return loads(dumps(obj)) == obj  # pyright: ignore[reportAny]
 
 
-def is_interned(s):
+def is_interned(s: str | None) ->  bool:
     return s is None or intern(s) is s
 
 
-def intern_frozenset_of_ids(fs):
+def intern_frozenset_of_ids(fs: abc.Iterable[str]) -> frozenset[str]:
     return frozenset(intern(s) for s in fs)
 
 
