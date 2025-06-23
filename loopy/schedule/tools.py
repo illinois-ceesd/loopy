@@ -64,10 +64,9 @@ import enum
 import itertools
 from dataclasses import dataclass
 from functools import cached_property, reduce
-from typing import TYPE_CHECKING, AbstractSet, Sequence
+from typing import TYPE_CHECKING, TypeAlias
 
 from constantdict import constantdict
-from typing_extensions import TypeAlias
 
 import islpy as isl
 
@@ -76,11 +75,11 @@ from pytools import memoize_method, memoize_on_first_arg
 from loopy.diagnostic import LoopyError
 from loopy.kernel.data import AddressSpace, ArrayArg, TemporaryVariable
 from loopy.schedule.tree import Tree
-from loopy.typing import InameStr, InameStrSet, not_none
+from loopy.typing import InameStr, InameStrSet, fset_union, not_none
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Mapping
+    from collections.abc import Callable, Collection, Mapping, Sequence, Set
 
     from loopy.kernel import LoopKernel
     from loopy.schedule import ScheduleItem
@@ -118,9 +117,9 @@ def temporaries_read_in_subkernel(
     inames = frozenset().union(*(kernel.insn_inames(insn_id)
                                  for insn_id in insn_ids))
     domain_idxs = {kernel.get_home_domain_index(iname) for iname in inames}
-    params = frozenset().union(*(
-        kernel.domains[dom_idx].get_var_names(isl.dim_type.param)
-        for dom_idx in domain_idxs))
+    params = fset_union(
+        kernel.domains[dom_idx].get_var_names_not_none(isl.dim_type.param)
+        for dom_idx in domain_idxs)
 
     return (frozenset(tv
                 for insn_id in insn_ids
@@ -147,7 +146,7 @@ def args_read_in_subkernel(
                                  for insn_id in insn_ids))
     domain_idxs = {kernel.get_home_domain_index(iname) for iname in inames}
     params = frozenset().union(*(
-        kernel.domains[dom_idx].get_var_names(isl.dim_type.param)
+        kernel.domains[dom_idx].get_var_names_not_none(isl.dim_type.param)
         for dom_idx in domain_idxs))
     return (frozenset(arg
                 for insn_id in insn_ids
@@ -944,7 +943,7 @@ def _order_loop_nests(
 
 
 @memoize_on_first_arg
-def _get_parallel_inames(kernel: LoopKernel) -> AbstractSet[str]:
+def _get_parallel_inames(kernel: LoopKernel) -> Set[str]:
     from loopy.kernel.data import ConcurrentTag, IlpBaseTag, VectorizeTag
 
     concurrent_inames = {iname for iname in kernel.all_inames()

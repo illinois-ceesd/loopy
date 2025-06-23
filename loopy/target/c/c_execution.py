@@ -28,7 +28,7 @@ import logging
 import os
 import tempfile
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Callable, ClassVar, Sequence
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import numpy as np
 from codepy.jit import compile_from_string
@@ -48,14 +48,17 @@ from loopy.types import LoopyType
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
     from constantdict import constantdict
+
+    from pymbolic import Expression
 
     from loopy.codegen.result import GeneratedProgram
     from loopy.kernel import LoopKernel
     from loopy.kernel.data import ArrayArg
     from loopy.schedule.tools import KernelArgInfo
     from loopy.translation_unit import TranslationUnit
-    from loopy.typing import Expression
 
 
 logger = logging.getLogger(__name__)

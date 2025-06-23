@@ -9,8 +9,6 @@
 """
 from __future__ import annotations
 
-from loopy.typing import not_none
-
 
 __copyright__ = "Copyright (C) 2012 Andreas Kloeckner"
 
@@ -40,18 +38,15 @@ from functools import cached_property
 from sys import intern
 from typing import (
     TYPE_CHECKING,
-    AbstractSet,
     Any,
-    Callable,
     ClassVar,
-    Iterator,
-    Mapping,
-    Sequence,
+    Literal,
 )
 from warnings import warn
 
 import numpy as np
 from constantdict import constantdict
+from typing_extensions import overload
 
 import islpy  # to help out Sphinx
 import islpy as isl
@@ -64,7 +59,6 @@ from pytools import (
 )
 from pytools.tag import Tag, Taggable, TagT
 
-import loopy.codegen
 import loopy.kernel.data  # to help out Sphinx
 from loopy.diagnostic import CannotBranchDomainTree, LoopyError, StaticValueFindingError
 from loopy.kernel.data import (
@@ -78,17 +72,29 @@ from loopy.kernel.data import (
 )
 from loopy.tools import update_persistent_hash
 from loopy.types import LoopyType, NumpyType
+from loopy.typing import PreambleGenerator, SymbolMangler, fset_union, not_none
 
 
 if TYPE_CHECKING:
-    from pymbolic import ArithmeticExpression
+    from collections.abc import (
+        Callable,
+        Collection,
+        Hashable,
+        Mapping,
+        Sequence,
+        Set,
+    )
+
+    from pymbolic import ArithmeticExpression, Expression
 
     from loopy.kernel.function_interface import InKernelCallable
     from loopy.kernel.instruction import InstructionBase
+    from loopy.kernel.tools import SetOperationCacheManager
     from loopy.options import Options
     from loopy.schedule import ScheduleItem
-    from loopy.target import TargetBase
-    from loopy.typing import Expression, InameStr
+    from loopy.target import ASTBuilderBase, ASTType, TargetBase
+    from loopy.translation_unit import CallablesTable
+    from loopy.typing import InameStr
 
 
 # {{{ loop kernel object
@@ -100,9 +106,11 @@ class KernelState(IntEnum):
     LINEARIZED = 3
 
 
-def _get_inames_from_domains(domains):
-    return frozenset().union(*
-            (frozenset(dom.get_var_names(dim_type.set)) for dom in domains))
+def _get_inames_from_domains(
+            domains: Sequence[isl.Set | isl.BasicSet]
+        ) -> Set[InameStr]:
+    return fset_union(
+            frozenset(dom.get_var_names_not_none(dim_type.set)) for dom in domains)
 
 
 @dataclass(frozen=True)
@@ -176,16 +184,11 @@ class LoopKernel(Taggable):
     state: KernelState = KernelState.INITIAL
     name: str = "loopy_kernel"
 
-    preambles: Sequence[tuple[int, str]] = ()
-    preamble_generators: Sequence[
-        Callable[
-                [loopy.codegen.PreambleInfo],
-                Iterator[tuple[int, str]]]
-            ] = ()
-    symbol_manglers: Sequence[
-            Callable[[LoopKernel, str], tuple[LoopyType, str] | None]] = ()
+    preambles: Sequence[tuple[str, str]] = ()
+    preamble_generators: Sequence[PreambleGenerator] = ()
+    symbol_manglers: Sequence[SymbolMangler] = ()
     linearization: Sequence[ScheduleItem] | None = None
-    iname_slab_increments: Mapping[InameStr, tuple[int, int]] = field(
+    iname_slab_increments: constantdict[InameStr, tuple[int, int]] = field(
             default_factory=constantdict)
     """
     A mapping from inames to (lower_incr,
@@ -202,7 +205,7 @@ class LoopKernel(Taggable):
     with non-parallel implementation tags.
     """
 
-    applied_iname_rewrites: tuple[dict[InameStr, Expression], ...] = ()
+    applied_iname_rewrites: Sequence[Mapping[InameStr, Expression]] = ()
     """
     A list of past substitution dictionaries that
     were applied to the kernel. These are stored so that they may be repeated
@@ -230,10 +233,12 @@ class LoopKernel(Taggable):
 
     # {{{ symbol mangling
 
-    def mangle_symbol(self, ast_builder, identifier):
-        manglers = ast_builder.symbol_manglers() + list(self.symbol_manglers)
-
-        for mangler in manglers:
+    def mangle_symbol(
+                self,
+                ast_builder: ASTBuilderBase[ASTType],
+                identifier: str
+            ) -> tuple[LoopyType, str] | None:
+        for mangler in [*self.symbol_manglers, *ast_builder.symbol_manglers()]:
             result = mangler(self, identifier)
             if result is not None:
                 return result
@@ -344,7 +349,7 @@ class LoopKernel(Taggable):
         from loopy.kernel.tools import is_domain_dependent_on_inames
 
         for dom_idx, dom in enumerate(self.domains):
-            inames = set(dom.get_var_names(dim_type.set))
+            inames = set(dom.get_var_names_not_none(dim_type.set))
 
             # This next domain may be nested inside the previous domain.
             # Or it may not, in which case we need to figure out how many
@@ -388,7 +393,7 @@ class LoopKernel(Taggable):
         return result
 
     @memoize_method
-    def all_parents_per_domain(self):
+    def all_parents_per_domain(self) -> Sequence[Sequence[int]]:
         """Return a list corresponding to self.domains (by index)
         containing domain indices which are nested around this
         domain.
@@ -396,12 +401,12 @@ class LoopKernel(Taggable):
         Each domains nest list walks from the leaves of the nesting
         tree to the root.
         """
-        result = []
+        result: list[list[int]] = []
 
         ppd = self.parents_per_domain()
         for parent in ppd:
             # keep walking up tree to find *all* parents
-            dom_result = []
+            dom_result: list[int] = []
             while parent is not None:
                 dom_result.insert(0, parent)
                 parent = ppd[parent]
@@ -415,7 +420,7 @@ class LoopKernel(Taggable):
         return {
                 iname: i_domain
                 for i_domain, dom in enumerate(self.domains)
-                for iname in dom.get_var_names(dim_type.set)}
+                for iname in dom.get_var_names_not_none(dim_type.set)}
 
     def get_home_domain_index(self, iname: str) -> int:
         return self._get_home_domain_map()[iname]
@@ -454,7 +459,7 @@ class LoopKernel(Taggable):
         # Subdomains may carry other domains' inames as parameters.
         # Move them back into the 'set' part of the space.
         param_names = {
-                result.get_dim_name(dim_type.param, i)
+                not_none(result.get_dim_name(dim_type.param, i))
                 for i in range(result.dim(dim_type.param))}
         for actual_iname in param_names - self.all_params():
             result = result.move_dims(
@@ -466,7 +471,7 @@ class LoopKernel(Taggable):
 
         return result
 
-    def get_inames_domain(self, inames: str | frozenset[str]) -> isl.BasicSet:
+    def get_inames_domain(self, inames: str | Collection[str]) -> isl.BasicSet:
         if not inames:
             return self.combine_domains(())
 
@@ -481,7 +486,7 @@ class LoopKernel(Taggable):
         return self._get_inames_domain_backend(inames)
 
     @memoize_method
-    def get_leaf_domain_indices(self, inames):
+    def get_leaf_domain_indices(self, inames: Collection[str]) -> list[int]:
         """Find the leaves of the domain tree needed to cover all inames.
 
         :arg inames: a non-mutable iterable
@@ -490,10 +495,10 @@ class LoopKernel(Taggable):
         hdm = self._get_home_domain_map()
         ppd = self.all_parents_per_domain()
 
-        domain_indices = set()
+        domain_indices: set[int] = set()
 
         # map root -> leaf
-        root_to_leaf = {}
+        root_to_leaf: dict[int, int] = {}
 
         for iname in inames:
             home_domain_index = hdm[iname]
@@ -501,7 +506,8 @@ class LoopKernel(Taggable):
                 # nothing new
                 continue
 
-            domain_path_to_root = [home_domain_index] + ppd[home_domain_index]
+            domain_path_to_root: list[int] = [
+                home_domain_index, *ppd[home_domain_index]]
             current_root = domain_path_to_root[-1]
             previous_leaf = root_to_leaf.get(current_root)
 
@@ -512,7 +518,7 @@ class LoopKernel(Taggable):
                 # it can introduce artificial restrictions on variables
                 # further up the tree.
 
-                prev_path_to_root = set([previous_leaf] + ppd[previous_leaf])
+                prev_path_to_root = {previous_leaf, *ppd[previous_leaf]}
                 if not prev_path_to_root <= set(domain_path_to_root):
                     raise CannotBranchDomainTree("iname set '%s' requires "
                             "branch in domain tree (when adding '%s')"
@@ -527,8 +533,8 @@ class LoopKernel(Taggable):
         return list(root_to_leaf.values())
 
     @memoize_method
-    def _get_inames_domain_backend(self, inames):
-        domain_indices = set()
+    def _get_inames_domain_backend(self, inames: Collection[InameStr]):
+        domain_indices: set[int] = set()
         for leaf_dom_idx in self.get_leaf_domain_indices(inames):
             domain_indices.add(leaf_dom_idx)
             domain_indices.update(self.all_parents_per_domain()[leaf_dom_idx])
@@ -539,7 +545,7 @@ class LoopKernel(Taggable):
 
     # {{{ iname wrangling
 
-    def iname_tags(self, iname):
+    def iname_tags(self, iname: InameStr)  -> frozenset[Tag]:
         return self.inames[iname].tags
 
     def iname_tags_of_type(
@@ -547,7 +553,7 @@ class LoopKernel(Taggable):
                 tag_type_or_types: type[TagT] | tuple[type[TagT], ...],
                 max_num: int | None = None,
                 min_num: int | None = None
-            ) -> AbstractSet[TagT]:
+            ) -> Set[TagT]:
         """Return a subset of *tags* that matches type *tag_type*. Raises exception
         if the number of tags found were greater than *max_num* or less than
         *min_num*.
@@ -589,7 +595,7 @@ class LoopKernel(Taggable):
         they should be run.
         """
         return {
-            not_none(insn.id): insn.within_inames
+            insn.id: insn.within_inames
             for insn in self.instructions
         }
 
@@ -600,7 +606,7 @@ class LoopKernel(Taggable):
             result.update(inames)
         return result
 
-    def insn_inames(self, insn):
+    def insn_inames(self, insn: str | InstructionBase) -> frozenset[InameStr]:
         if isinstance(insn, str):
             insn = self.id_to_insn[insn]
         return insn.within_inames
@@ -616,7 +622,7 @@ class LoopKernel(Taggable):
         return result
 
     @memoize_method
-    def _remove_inames_for_shared_hw_axes(self, cond_inames):
+    def _remove_inames_for_shared_hw_axes(self, cond_inames: Set[InameStr]):
         """
         See if cond_inames contains references to two (or more) inames that
         boil down to the same tag. If so, exclude them. (We shouldn't be writing
@@ -624,7 +630,7 @@ class LoopKernel(Taggable):
         the other inames as well.)
         """
 
-        tag_key_uses = defaultdict(list)
+        tag_key_uses: dict[Hashable, list[InameStr]] = defaultdict(list)
 
         from loopy.kernel.data import HardwareConcurrentTag
 
@@ -638,7 +644,7 @@ class LoopKernel(Taggable):
                 key for key, user_inames in tag_key_uses.items()
                 if len(user_inames) > 1}
 
-        multi_use_inames = set()
+        multi_use_inames: set[InameStr] = set()
         for iname in cond_inames:
             tags = self.iname_tags_of_type(iname, HardwareConcurrentTag)
             if tags:
@@ -718,17 +724,16 @@ class LoopKernel(Taggable):
         return result
 
     @memoize_method
-    def get_read_variables(self):
-        result = set()
-        for insn in self.instructions:
-            result.update(insn.read_dependency_names())
+    def get_read_variables(self) -> Set[str]:
+        return fset_union(
+            insn.read_dependency_names()
+            for insn in self.instructions
+        ) | fset_union(
+            domain.get_var_names_not_none(dim_type.param)
+            for domain in self.domains
+        )
 
-        for domain in self.domains:
-            result.update(domain.get_var_names(dim_type.param))
-
-        return result
-
-    def get_written_variables(self):
+    def get_written_variables(self) -> Set[str]:
         try:
             return self._cached_written_variables
         except AttributeError:
@@ -798,7 +803,7 @@ class LoopKernel(Taggable):
     # {{{ bounds finding
 
     @property
-    def cache_manager(self):
+    def cache_manager(self) -> SetOperationCacheManager:
         try:
             return self._cache_manager
         except AttributeError:
@@ -810,7 +815,10 @@ class LoopKernel(Taggable):
         return cm
 
     @memoize_method
-    def get_iname_bounds(self, iname, constants_only=False):
+    def get_iname_bounds(self,
+                 iname: str,
+                 constants_only: bool = False
+             ) -> _BoundsRecord:
         domain = self.get_inames_domain(frozenset([iname]))
 
         assumptions = self.assumptions.project_out_except(
@@ -853,8 +861,12 @@ class LoopKernel(Taggable):
                 constants_only=True)))
 
     @memoize_method
-    def get_grid_sizes_for_insn_ids_as_dicts(self, insn_ids,
-            callables_table, ignore_auto=False):
+    def get_grid_sizes_for_insn_ids_as_dicts(self,
+                insn_ids: Collection[str],
+                callables_table: CallablesTable,
+                *,
+                ignore_auto: bool = False,
+            ) -> tuple[dict[int, isl.PwAff], dict[int, isl.PwAff]]:
         """
         Returns a tuple of (global_sizes, local_sizes), where global_sizes,
         local_sizes are the grid sizes accommodating all of *insn_ids*. The grid
@@ -949,8 +961,17 @@ class LoopKernel(Taggable):
         return global_sizes, local_sizes
 
     @memoize_method
-    def get_grid_sizes_for_insn_ids(self, insn_ids, callables_table,
-            ignore_auto=False, return_dict=False):
+    def get_grid_sizes_for_insn_ids(self,
+                insn_ids: Collection[str],
+                callables_table: CallablesTable,
+                *,
+                ignore_auto: bool = False,
+                return_dict: bool = False
+            ) -> (
+            tuple[dict[int, isl.PwAff],
+                dict[int, isl.PwAff]]
+            | tuple[tuple[isl.PwAff, ...],
+                    tuple[isl.PwAff, ...]]):
         """Return a tuple (global_size, local_size) containing a grid that
         could accommodate execution of all instructions whose IDs are given
         in *insn_ids*.
@@ -999,9 +1020,38 @@ class LoopKernel(Taggable):
         return (to_dim_tuple(global_sizes, "global"),
                 to_dim_tuple(local_sizes, "local"))
 
+    @overload
+    def get_grid_sizes_for_insn_ids_as_exprs(self,
+                        insn_ids: Collection[str],
+                        callables_table: CallablesTable,
+                        *,
+                        ignore_auto: bool = ...,
+                        return_dict: Literal[False] = ...
+                    ) -> tuple[tuple[Expression, ...], tuple[Expression, ...]]:
+        ...
+
+    @overload
+    def get_grid_sizes_for_insn_ids_as_exprs(self,
+                        insn_ids: Collection[str],
+                        callables_table: CallablesTable,
+                        *,
+                        ignore_auto: bool = ...,
+                        return_dict: Literal[True]
+                    ) -> tuple[dict[int, Expression], dict[int, Expression]]:
+        ...
+
     @memoize_method
-    def get_grid_sizes_for_insn_ids_as_exprs(self, insn_ids,
-            callables_table, ignore_auto=False, return_dict=False):
+    def get_grid_sizes_for_insn_ids_as_exprs(self,
+                insn_ids: Collection[str],
+                callables_table: CallablesTable,
+                *,
+                ignore_auto: bool = False,
+                return_dict: bool = False
+            ) -> (
+            tuple[dict[int, ArithmeticExpression],
+                dict[int, ArithmeticExpression]]
+            | tuple[tuple[ArithmeticExpression, ...],
+                    tuple[ArithmeticExpression, ...]]):
         """Return a tuple (global_size, local_size) containing a grid that
         could accommodate execution of all instructions whose IDs are given
         in *insn_ids*.
@@ -1012,7 +1062,8 @@ class LoopKernel(Taggable):
         """
 
         grid_size, group_size = self.get_grid_sizes_for_insn_ids(
-                insn_ids, callables_table, ignore_auto, return_dict)
+                insn_ids, callables_table,
+                ignore_auto=ignore_auto, return_dict=return_dict)
 
         if return_dict:
             def dict_to_exprs(d):
@@ -1028,8 +1079,15 @@ class LoopKernel(Taggable):
 
         return tup_to_exprs(grid_size), tup_to_exprs(group_size)
 
-    def get_grid_size_upper_bounds(self, callables_table, ignore_auto=False,
-            return_dict=False):
+    def get_grid_size_upper_bounds(self,
+                callables_table: CallablesTable,
+                ignore_auto: bool = False,
+                return_dict: bool = False
+            ) -> (
+            tuple[dict[int, isl.PwAff],
+                dict[int, isl.PwAff]]
+            | tuple[tuple[isl.PwAff, ...],
+                    tuple[isl.PwAff, ...]]):
         """Return a tuple (global_size, local_size) containing a grid that
         could accommodate execution of *all* instructions in the kernel.
 
@@ -1040,12 +1098,37 @@ class LoopKernel(Taggable):
                 callables_table, ignore_auto=ignore_auto,
                 return_dict=return_dict)
 
+    @overload
+    def get_grid_size_upper_bounds_as_exprs(self,
+                        callables_table: CallablesTable,
+                        *,
+                        ignore_auto: bool = ...,
+                        return_dict: Literal[False] = ...
+                    ) -> tuple[
+                            tuple[ArithmeticExpression, ...],
+                            tuple[ArithmeticExpression, ...]]:
+        ...
+
+    @overload
+    def get_grid_size_upper_bounds_as_exprs(self,
+                        callables_table: CallablesTable,
+                        *,
+                        ignore_auto: bool = ...,
+                        return_dict: Literal[True]
+                    ) -> tuple[
+                            dict[int, ArithmeticExpression],
+                            dict[int, ArithmeticExpression]]:
+        ...
+
     def get_grid_size_upper_bounds_as_exprs(
-            self, callables_table,
-            ignore_auto=False, return_dict=False
-            ) -> tuple[
-                    tuple[ArithmeticExpression, ...],
-                    tuple[ArithmeticExpression, ...]]:
+                self, callables_table: CallablesTable,
+                ignore_auto: bool = False,
+                return_dict: bool = False
+            ) -> (
+            tuple[dict[int, ArithmeticExpression],
+                dict[int, ArithmeticExpression]]
+            | tuple[tuple[ArithmeticExpression, ...],
+                    tuple[ArithmeticExpression, ...]]):
         """Return a tuple (global_size, local_size) containing a grid that
         could accommodate execution of *all* instructions in the kernel.
 
