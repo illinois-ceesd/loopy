@@ -28,10 +28,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
 from pymbolic import Expression, Variable, var
+from pytools import ImmutableRecord, memoize_on_first_arg
 
 from loopy.diagnostic import LoopyError
 from loopy.kernel.function_interface import CallableKernel, ScalarCallable
-from loopy.symbolic import RuleAwareIdentityMapper, SubstitutionRuleMappingContext
+from loopy.symbolic import (
+    RuleAwareIdentityMapper,
+    SubstitutionRuleMappingContext
+)
 from loopy.transform.iname import remove_any_newly_unused_inames
 from loopy.translation_unit import TranslationUnit, for_each_kernel
 
@@ -522,6 +526,7 @@ def assignment_to_subst(kernel, lhs_name, extra_arguments=(), within=None,
 # {{{ expand_subst
 
 @for_each_kernel
+@memoize_on_first_arg
 def expand_subst(kernel, within=None):
     """
     Returns an instance of :class:`loopy.LoopKernel` with the substitutions
