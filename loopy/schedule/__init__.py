@@ -1038,6 +1038,162 @@ def _generate_loop_schedules_v2(kernel: LoopKernel) -> Sequence[ScheduleItem]:
 
 # {{{ legacy scheduling algorithm
 
+def _get_outermost_diverging_inames(tree, within1, within2):
+    """
+    For loop nestings *within1* and *within2*, returns the first inames at which
+    the loops nests diverge in the loop nesting tree *tree*.
+
+    :arg tree: A :class:`loopy.tools.Tree` of inames, denoting a loop nesting.
+    :arg within1: A :class:`frozenset` of inames.
+    :arg within2: A :class:`frozenset` of inames.
+    """
+    common_ancestors = (within1 & within2) | {""}
+
+    innermost_parent = max(common_ancestors,
+                           key=lambda k: tree.depth(k))
+    iname1, = frozenset(tree.children(innermost_parent)) & within1
+    iname2, = frozenset(tree.children(innermost_parent)) & within2
+
+    return iname1, iname2
+
+
+class V2SchedulerNotImplementedException(RuntimeError):
+    pass
+
+
+def generate_loop_schedules_v2(kernel):
+    # from loopy.schedule.tools import get_loop_nest_tree
+    from loopy.schedule.tools import get_loop_tree
+    from functools import reduce
+    from pytools.graph import compute_topological_order
+    from loopy.kernel.data import ConcurrentTag, IlpBaseTag, VectorizeTag
+
+    concurrent_inames = {iname for iname in kernel.all_inames()
+                         if kernel.iname_tags_of_type(iname, ConcurrentTag)}
+    ilp_inames = {iname for iname in kernel.all_inames()
+                  if kernel.iname_tags_of_type(iname, IlpBaseTag)}
+    vec_inames = {iname for iname in kernel.all_inames()
+                  if kernel.iname_tags_of_type(iname, VectorizeTag)}
+    parallel_inames = (concurrent_inames - ilp_inames - vec_inames)
+
+    # {{{ can v2 scheduler handle??
+
+    if any(len(insn.conflicts_with_groups) != 0 for insn in kernel.instructions):
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " kernels with instruction having conflicts with groups.")
+
+    if any(insn.priority != 0 for insn in kernel.instructions):
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " kernels with instruction priorities set.")
+
+    if kernel.linearization is not None:
+        # cannnot handle preschedule yet
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " prescheduled kernels.")
+
+    if ilp_inames or vec_inames:
+        raise V2SchedulerNotImplementedException("v2 scheduler cannot schedule"
+                " loops tagged with 'ilp'/'vec' as they are not guaranteed to"
+                " be single entry loops.")
+
+    # }}}
+
+    # loop_nest_tree = get_loop_nest_tree(kernel)
+    loop_nest_tree = get_loop_tree(kernel)
+
+    # loop_inames: inames that are realized as loops. Concurrent inames aren't
+    # realized as a loop in the generated code for a loopy.TargetBase.
+    loop_inames = (reduce(frozenset.union, (insn.within_inames
+                                            for insn in kernel.instructions),
+                          frozenset())
+                   - parallel_inames)
+
+    # The idea here is to build a DAG, where nodes are schedule items and if
+    # there exists an edge from schedule item A to schedule item B in the DAG =>
+    # B *must* come after A in the linearized result.
+
+    dag = {}
+
+    # LeaveLoop(i) *must* follow EnterLoop(i)
+    dag.update({EnterLoop(iname=iname): frozenset({LeaveLoop(iname=iname)})
+                for iname in loop_inames})
+    dag.update({LeaveLoop(iname=iname): frozenset()
+                for iname in loop_inames})
+    dag.update({RunInstruction(insn_id=insn.id): frozenset()
+                for insn in kernel.instructions})
+
+    # {{{ add constraints imposed by the loop nesting
+
+    for outer_loop in loop_nest_tree.nodes():
+        if outer_loop == "":
+            continue
+
+        for child in loop_nest_tree.children(outer_loop):
+            inner_loop = child
+            dag[EnterLoop(iname=outer_loop)] |= {EnterLoop(iname=inner_loop)}
+            dag[LeaveLoop(iname=inner_loop)] |= {LeaveLoop(iname=outer_loop)}
+
+    # }}}
+
+    # {{{ add deps. b/w schedule items coming from insn. depepdencies
+
+    for insn in kernel.instructions:
+        insn_loop_inames = insn.within_inames & loop_inames
+        for dep_id in insn.depends_on:
+            dep = kernel.id_to_insn[dep_id]
+            dep_loop_inames = dep.within_inames & loop_inames
+            # Enforce instruction dep:
+            dag[RunInstruction(insn_id=dep_id)] |= {RunInstruction(insn_id=insn.id)}
+
+            # {{{ register deps on loop entry/leave because of insn. deps
+
+            if dep_loop_inames < insn_loop_inames:
+                for iname in insn_loop_inames - dep_loop_inames:
+                    dag[RunInstruction(insn_id=dep.id)] |= {EnterLoop(iname=iname)}
+            elif insn_loop_inames < dep_loop_inames:
+                for iname in dep_loop_inames - insn_loop_inames:
+                    dag[LeaveLoop(iname=iname)] |= {RunInstruction(insn_id=insn.id)}
+            elif dep_loop_inames != insn_loop_inames:
+                insn_iname, dep_iname = _get_outermost_diverging_inames(
+                        loop_nest_tree, insn_loop_inames, dep_loop_inames)
+                dag[LeaveLoop(iname=dep_iname)] |= {EnterLoop(iname=insn_iname)}
+            else:
+                pass
+
+            # }}}
+
+        for iname in insn_loop_inames:
+            # For an insn within a loop nest 'i'
+            # for i
+            #   insn
+            # end i
+            # 'insn' *must* come b/w 'for i' and 'end i'
+            dag[EnterLoop(iname=iname)] |= {RunInstruction(insn_id=insn.id)}
+            dag[RunInstruction(insn_id=insn.id)] |= {LeaveLoop(iname=iname)}
+
+    # }}}
+
+    def iname_key(iname):
+        all_ancestors = sorted(loop_nest_tree.ancestors(iname),
+                               key=lambda x: loop_nest_tree.depth(x))
+        return ",".join(all_ancestors+[iname])
+
+    def key(x):
+        if isinstance(x, RunInstruction):
+            iname = max((kernel.id_to_insn[x.insn_id].within_inames & loop_inames),
+                        key=lambda k: loop_nest_tree.depth(k),
+                        default="")
+            result = (iname_key(iname), x.insn_id)
+        elif isinstance(x, (EnterLoop, LeaveLoop)):
+            result = (iname_key(x.iname),)
+        else:
+            raise NotImplementedError
+
+        return result
+
+    return compute_topological_order(dag, key=key)
+
+
 def _generate_loop_schedules_internal(
             sched_state: SchedulerState,
             debug: ScheduleDebugger | None = None,
@@ -1095,7 +1251,7 @@ def _generate_loop_schedules_internal(
 
     if isinstance(next_preschedule_item, CallKernel):
         assert sched_state.within_subkernel is False
-        yield from _generate_loop_schedules_internal(
+        yield from generate_loop_schedules_internal(
                 sched_state.copy(
                     schedule=(*sched_state.schedule, next_preschedule_item),
                     preschedule=sched_state.preschedule[1:],
@@ -1108,7 +1264,7 @@ def _generate_loop_schedules_internal(
         assert sched_state.within_subkernel is True
         # Make sure all subkernel inames have finished.
         if sched_state.active_inames == sched_state.enclosing_subkernel_inames:
-            yield from _generate_loop_schedules_internal(
+            yield from generate_loop_schedules_internal(
                     sched_state.copy(
                         schedule=(*sched_state.schedule, next_preschedule_item),
                         preschedule=sched_state.preschedule[1:],
@@ -1127,7 +1283,7 @@ def _generate_loop_schedules_internal(
     if (
             isinstance(next_preschedule_item, Barrier)
             and next_preschedule_item.originating_insn_id is None):
-        yield from _generate_loop_schedules_internal(
+        yield from generate_loop_schedules_internal(
                     sched_state.copy(
                         schedule=(*sched_state.schedule, next_preschedule_item),
                         preschedule=sched_state.preschedule[1:]),
@@ -1304,7 +1460,7 @@ def _generate_loop_schedules_internal(
             # Don't be eager about entering/leaving loops--if progress has been
             # made, revert to top of scheduler and see if more progress can be
             # made.
-            for sub_sched in _generate_loop_schedules_internal(
+            for sub_sched in generate_loop_schedules_internal(
                     new_sched_state,
                     debug=debug):
                 yield sub_sched
@@ -1400,7 +1556,7 @@ def _generate_loop_schedules_internal(
 
             if can_leave and not debug_mode:
 
-                for sub_sched in _generate_loop_schedules_internal(
+                for sub_sched in generate_loop_schedules_internal(
                         sched_state.copy(
                             schedule=(
                                 (*sched_state.schedule,
@@ -1610,7 +1766,7 @@ def _generate_loop_schedules_internal(
                             key_iname),
                         reverse=True):
 
-                    for sub_sched in _generate_loop_schedules_internal(
+                    for sub_sched in generate_loop_schedules_internal(
                             sched_state.copy(
                                 schedule=(
                                     (*sched_state.schedule, EnterLoop(iname=iname))),
@@ -2230,14 +2386,16 @@ def _generate_loop_schedules_inner(
     if debug_args is None:
         debug_args = {}
 
+    debug = ScheduleDebugger(**debug_args)
+
     from loopy.kernel import KernelState
     if kernel.state not in (KernelState.PREPROCESSED, KernelState.LINEARIZED):
         raise LoopyError("cannot schedule a kernel that has not been "
-                "preprocessed")
+                         "preprocessed")
 
     from loopy.schedule.tools import V2SchedulerNotImplementedError
     try:
-        gen_sched = _generate_loop_schedules_v2(kernel)
+        gen_sched = generate_loop_schedules_v2(kernel)
         yield _postprocess_schedule(kernel, callables_table, gen_sched)
         return
 
@@ -2249,8 +2407,6 @@ def _generate_loop_schedules_inner(
              stacklevel=1)
 
     schedule_count = 0
-
-    debug = ScheduleDebugger(**debug_args)
 
     preschedule = (kernel.linearization
                    if kernel.state == KernelState.LINEARIZED
@@ -2347,7 +2503,7 @@ def _generate_loop_schedules_inner(
             debug.debug_length = len(debug.longest_rejected_schedule)
             while True:
                 try:
-                    for _ in _generate_loop_schedules_internal(
+                    for _ in generate_loop_schedules_internal(
                             sched_state, debug=debug, **schedule_gen_kwargs):
                         pass
 
@@ -2358,7 +2514,7 @@ def _generate_loop_schedules_inner(
                 break
 
     try:
-        for gen_sched in _generate_loop_schedules_internal(
+        for gen_sched in generate_loop_schedules_internal(
                 sched_state, debug=debug, **schedule_gen_kwargs):
             debug.stop()
 
