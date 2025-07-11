@@ -191,7 +191,7 @@ from loopy.transform.instruction import (
 )
 from loopy.transform.loop_fusion import (
     get_kennedy_unweighted_fusion_candidates,
-    rename_inames_in_batch
+    rename_inames_in_batch,
 )
 from loopy.transform.pack_and_unpack_args import pack_and_unpack_args_for_call
 from loopy.transform.padding import (
