@@ -29,7 +29,7 @@ __doc__ = """
 .. autoclass:: LoopTree
 
 .. autofunction:: separate_loop_nest
-.. autofunction:: _get_partial_loop_nest_tree
+.. autofunction:: get_partial_loop_nest_tree
 .. autofunction:: get_loop_tree
 
 References
@@ -953,7 +953,7 @@ def _get_parallel_inames(kernel: LoopKernel) -> Set[str]:
     return (concurrent_inames - ilp_inames - vec_inames)
 
 
-def _get_partial_loop_nest_tree(kernel: LoopKernel) -> LoopNestTree:
+def get_partial_loop_nest_tree(kernel: LoopKernel) -> LoopNestTree:
     """
     Returns a tree representing the *kernel*'s loop nests.
 
@@ -1076,7 +1076,7 @@ def get_loop_tree(kernel: LoopKernel) -> LoopTree:
     """
     from islpy import dim_type
 
-    tree = _get_partial_loop_nest_tree(kernel)
+    tree = get_partial_loop_nest_tree(kernel)
     iname_to_tree_node_id = (
         _get_iname_to_tree_node_id_from_partial_loop_nest_tree(tree))
 
