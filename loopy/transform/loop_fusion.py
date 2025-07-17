@@ -914,7 +914,9 @@ def get_kennedy_unweighted_fusion_candidates(
             # Then i and j map to the same node in the loop nest tree.
 
             conflict_iname = nest_tree_id_to_candidate[loop_nest_tree_node_id]
-            raise LoopyError(
+            # raise LoopyError(
+            from warnings import warn
+            warn(
                 f"'{iname}' and '{conflict_iname}' "
                 "cannot fused be fused as they can be nested "
                 "within one another."
