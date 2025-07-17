@@ -46,8 +46,10 @@ from loopy.typing import InsnId, fset_union
 
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Collection, Iterable, Mapping, Sequence, Set
-
+    from collections.abc import (
+        Callable, Collection, Iterable,
+        Mapping, Optional, Sequence, Set
+    )
     from loopy.kernel.instruction import InstructionBase
     from loopy.match import RuleStack
     from loopy.schedule.tools import LoopNestTree
@@ -612,6 +614,7 @@ def _fuse_sequential_loops_within_outer_loops(
     outer_inames: frozenset[InameStr],
     name_gen: Callable[[str], str],
     prefix: str,
+    force_infusible: Callable[[str, str], bool] = None
 ):
     from collections import deque
 
@@ -629,7 +632,8 @@ def _fuse_sequential_loops_within_outer_loops(
 
         queue = deque([loops_with_no_preds[0]])
         for node in loops_with_no_preds[1:]:
-            queue.append(node)
+            if not force_infusible(node, loops_with_no_preds[0]):
+                queue.append(node)
 
         loops_to_be_fused: set[InameStr] = set()
         non_fusible_loops: set[InameStr] = set()
@@ -655,7 +659,8 @@ def _fuse_sequential_loops_within_outer_loops(
             loops_to_be_fused.add(next_loop_in_queue)
 
             for succ in ldg.successors[next_loop_in_queue]:
-                if ldg.is_infusible.get((next_loop_in_queue, succ), False):
+                if (ldg.is_infusible.get((next_loop_in_queue, succ), False)
+                    or force_infusible(next_loop_in_queue, succ)):
                     non_fusible_loops.add(succ)
                 else:
                     queue.append(succ)
@@ -793,8 +798,9 @@ def _get_partial_loop_nest_tree_for_fusion(kernel: LoopKernel):
 def get_kennedy_unweighted_fusion_candidates(
             kernel: LoopKernel,
             candidates: Collection[InameStr],
-            *, prefix: str = "ifused"
-        ) -> Mapping[InameStr, Collection[InameStr]]:
+        *,
+        force_infusible: Optional[Callable[[str, str], bool]] = None,
+        prefix: str = "ifused") -> Mapping[InameStr, Collection[InameStr]]:
     """
     Returns the fusion candidates mapping that could be fed to
     :func:`rename_inames_in_batch` similar to Kennedy's unweighted
@@ -834,6 +840,8 @@ def get_kennedy_unweighted_fusion_candidates(
 
     candidates = frozenset(candidates)
     vng = kernel.get_var_name_generator()
+    if force_infusible is None:
+        force_infusible = lambda x, y: False  # noqa: E731
 
     # {{{ implementation scope / sanity checks
 
@@ -941,6 +949,7 @@ def get_kennedy_unweighted_fusion_candidates(
                 outer_inames,
                 vng,
                 prefix,
+                force_infusible
             )
         )
 
