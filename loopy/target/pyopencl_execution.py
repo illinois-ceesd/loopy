@@ -353,8 +353,13 @@ class PyOpenCLExecutor(ExecutorBase):
                 .build(options=t_unit[self.entrypoint].options.build_options))
 
         cl_kernels = _Kernels()
+        output_kernels = []
         for dp in cl_program.kernel_names.split(";"):
             setattr(cl_kernels, dp, getattr(cl_program, dp))
+            output_kernels.append(dp)
+        if output_kernels:
+            print(f"KERNEL NAMES: {output_kernels}")
+            print(f"DEVICE CODE: {dev_code}")
 
         return _KernelInfo(
                 cl_kernels=cl_kernels,
