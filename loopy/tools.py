@@ -26,7 +26,18 @@ import collections.abc as abc
 import logging
 from functools import cached_property
 from sys import intern
-from typing import TYPE_CHECKING, ClassVar, Generic, Literal, TypeVar, cast, overload
+from typing import (
+    TYPE_CHECKING,
+    ClassVar,
+    FrozenSet,
+    Generic,
+    Literal,
+    TypeVar,
+    Iterator,
+    cast,
+    overload
+)
+from dataclasses import dataclass
 
 import numpy as np
 from constantdict import constantdict

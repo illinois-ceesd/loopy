@@ -70,6 +70,7 @@ from typing import TYPE_CHECKING, TypeAlias
 from constantdict import constantdict
 
 import islpy as isl
+
 from pytools import memoize_method, memoize_on_first_arg
 
 from loopy.diagnostic import LoopyError

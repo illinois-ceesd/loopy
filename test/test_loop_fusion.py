@@ -315,6 +315,7 @@ def test_loop_fusion_with_induced_dependencies_from_sibling_nests(
         <> tmp2[j] = j
         out1[i1] = tmp2[i1]
         out2[i2] = 2 * tmp1[i2]
+        """)
         """,
     )
     ref_t_unit = t_unit
